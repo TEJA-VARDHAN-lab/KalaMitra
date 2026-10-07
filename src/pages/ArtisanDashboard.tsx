@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Plus, Package, ShoppingBag, Award, CheckCircle2 } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Plus, Package, ShoppingBag, Award, CheckCircle2, Upload, X, AlertCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { VoiceInput } from '../components/VoiceInput';
 import { ProductCard } from '../components/ProductCard';
@@ -16,9 +16,108 @@ export const ArtisanDashboard: React.FC = () => {
   const [suggestedPrice, setSuggestedPrice] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState<'products' | 'orders'>('products');
+  const [photoUrlInput, setPhotoUrlInput] = useState('');
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const artisanProducts = state.products.filter(p => p.artisanId === state.user?.id);
   const artisanOrders = state.orders.filter(o => o.artisanId === state.user?.id);
+
+  const isValidUrl = (urlStr: string) => {
+    if (urlStr.startsWith('data:image/')) return true;
+    try {
+      const parsed = new URL(urlStr);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
+  const handleAddPhotoUrl = () => {
+    const trimmed = photoUrlInput.trim();
+    if (!trimmed) {
+      setPhotoError('Please enter an image URL or choose a file.');
+      return;
+    }
+
+    if (!isValidUrl(trimmed)) {
+      setPhotoError('Please enter a valid URL (e.g. https://images.unsplash.com/...)');
+      return;
+    }
+
+    setCurrentProduct(prev => ({
+      ...prev,
+      photos: [...(prev.photos || []), trimmed],
+    }));
+    setPhotoUrlInput('');
+    setPhotoError(null);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
+    const validFiles: File[] = [];
+    let hasInvalid = false;
+
+    Array.from(files).forEach(file => {
+      if (allowedTypes.includes(file.type) || /\.(jpe?g|png|webp)$/i.test(file.name)) {
+        validFiles.push(file);
+      } else {
+        hasInvalid = true;
+      }
+    });
+
+    if (hasInvalid) {
+      setPhotoError('Unsupported format. Please select JPG, JPEG, PNG, or WEBP images.');
+    } else {
+      setPhotoError(null);
+    }
+
+    if (validFiles.length === 0) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    validFiles.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (loadEvent) => {
+        const result = loadEvent.target?.result as string;
+        if (result) {
+          setCurrentProduct(prev => ({
+            ...prev,
+            photos: [...(prev.photos || []), result],
+          }));
+        }
+      };
+      reader.onerror = () => {
+        setPhotoError(`Failed to load file: ${file.name}`);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleRemovePhoto = (indexToRemove: number) => {
+    setCurrentProduct(prev => ({
+      ...prev,
+      photos: prev.photos?.filter((_, idx) => idx !== indexToRemove) || [],
+    }));
+    setPhotoError(null);
+  };
+
+  const resetFormState = () => {
+    setShowAddProduct(false);
+    setCurrentProduct({});
+    setAiStory('');
+    setPhotoUrlInput('');
+    setPhotoError(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const handleVoiceTranscript = async (text: string) => {
     if (text.trim().length > 10) {
@@ -27,8 +126,8 @@ export const ArtisanDashboard: React.FC = () => {
         const result = await generateAIStory(text, state.user?.region || 'India', state.currentLanguage);
         setAiStory(result.story);
         setSuggestedPrice(result.suggestedPrice);
-        setCurrentProduct({
-          ...currentProduct,
+        setCurrentProduct(prev => ({
+          ...prev,
           name: text.split(' ').slice(0, 5).join(' '),
           description: text,
           story: result.story,
@@ -36,7 +135,7 @@ export const ArtisanDashboard: React.FC = () => {
           materials: result.materials,
           suggestedPrice: result.suggestedPrice,
           price: result.suggestedPrice,
-        });
+        }));
       } catch (error) {
         console.error('AI generation failed:', error);
       }
@@ -69,9 +168,7 @@ export const ArtisanDashboard: React.FC = () => {
     await backendService.addProduct(product);
     dispatch({ type: 'ADD_PRODUCT', payload: product });
     
-    setShowAddProduct(false);
-    setCurrentProduct({});
-    setAiStory('');
+    resetFormState();
     
     alert('✅ Product Submitted for QC Review!\n\nYour product has been submitted to our quality control team.\n\n⏳ It will be reviewed by a coordinator before going live on the marketplace.\n\n📋 You will receive a notification once the review is complete.');
   };
@@ -170,79 +267,96 @@ export const ArtisanDashboard: React.FC = () => {
                     Product Photos (Add multiple images)
                   </label>
                   
-                  <div className="flex gap-2 mb-3">
+                  <div className="flex flex-col sm:flex-row gap-2 mb-2">
                     <input
                       type="text"
                       placeholder="Enter image URL (or paste from Unsplash)"
                       id="photoInput"
-                      className="flex-1 px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-terracotta-400 outline-none"
-                      onKeyPress={(e) => {
+                      value={photoUrlInput}
+                      onChange={(e) => {
+                        setPhotoUrlInput(e.target.value);
+                        if (photoError) setPhotoError(null);
+                      }}
+                      onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const input = e.target as HTMLInputElement;
-                          if (input.value.trim()) {
-                            setCurrentProduct({
-                              ...currentProduct,
-                              photos: [...(currentProduct.photos || []), input.value.trim()],
-                            });
-                            input.value = '';
-                          }
+                          handleAddPhotoUrl();
                         }
                       }}
+                      className={`flex-1 px-4 py-2 border-2 rounded-lg outline-none transition-colors ${
+                        photoError ? 'border-red-400 focus:border-red-500' : 'border-gray-300 focus:border-terracotta-400'
+                      }`}
                     />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const input = document.getElementById('photoInput') as HTMLInputElement;
-                        if (input.value.trim()) {
-                          setCurrentProduct({
-                            ...currentProduct,
-                            photos: [...(currentProduct.photos || []), input.value.trim()],
-                          });
-                          input.value = '';
-                        }
-                      }}
-                      className="px-6 py-2 bg-terracotta-500 text-white rounded-lg hover:bg-terracotta-600 font-semibold whitespace-nowrap"
-                    >
-                      + Add Photo
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleAddPhotoUrl}
+                        className="flex-1 sm:flex-none px-5 py-2 bg-terracotta-500 text-white rounded-lg hover:bg-terracotta-600 font-semibold whitespace-nowrap transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                      >
+                        <Plus size={18} />
+                        Add Photo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex-1 sm:flex-none px-4 py-2 bg-saffron-100 text-saffron-800 border border-saffron-300 hover:bg-saffron-200 rounded-lg font-semibold whitespace-nowrap transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                        title="Upload JPG, JPEG, PNG, or WEBP image"
+                      >
+                        <Upload size={18} />
+                        Choose Image
+                      </button>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/jpg"
+                        multiple
+                        className="hidden"
+                        onChange={handleFileUpload}
+                      />
+                    </div>
                   </div>
+
+                  {photoError && (
+                    <div className="flex items-center gap-1.5 text-sm text-red-600 mb-2">
+                      <AlertCircle size={16} className="flex-shrink-0" />
+                      <span>{photoError}</span>
+                    </div>
+                  )}
 
                   <p className="text-xs text-gray-500 mb-3">
                     Press Enter or click "Add Photo" to add each image. You can add unlimited photos.
                   </p>
 
                   {currentProduct.photos && currentProduct.photos.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-sm font-semibold text-green-600">
-                        ✓ {currentProduct.photos.length} photo(s) added
+                    <div className="space-y-2 mb-4">
+                      <p className="text-sm font-semibold text-green-600 flex items-center gap-1">
+                        <span>✓ {currentProduct.photos.length} photo(s) added</span>
+                        <span className="text-xs text-gray-500 font-normal ml-2">
+                          (First photo is primary)
+                        </span>
                       </p>
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                         {currentProduct.photos.map((photo, idx) => (
-                          <div key={idx} className="relative group">
+                          <div key={idx} className="relative group bg-gray-100 rounded-lg overflow-hidden border-2 border-gray-200 hover:border-terracotta-300 transition-all shadow-sm">
                             <img 
                               src={photo} 
                               alt={`Product ${idx + 1}`} 
-                              className="w-full h-32 object-cover rounded-lg border-2 border-gray-200"
+                              className="w-full h-32 object-cover"
                               onError={(e) => {
-                                (e.target as HTMLImageElement).src = 'https://via.placeholder.com/300x200?text=Invalid+Image';
+                                (e.target as HTMLImageElement).src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect fill="%23f3f4f6" width="300" height="200"/><text fill="%239ca3af" font-family="sans-serif" font-size="14" dy="10.5" font-weight="bold" x="50%" y="50%" text-anchor="middle">Image Failed to Load</text></svg>';
                               }}
                             />
                             <button
                               type="button"
-                              onClick={() => {
-                                setCurrentProduct({
-                                  ...currentProduct,
-                                  photos: currentProduct.photos?.filter((_, i) => i !== idx),
-                                });
-                              }}
-                              className="absolute top-1 right-1 bg-red-500 text-white w-6 h-6 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-sm font-bold"
+                              onClick={() => handleRemovePhoto(idx)}
+                              className="absolute top-1.5 right-1.5 bg-red-600 hover:bg-red-700 text-white w-7 h-7 rounded-full shadow transition-all flex items-center justify-center text-xs font-bold"
                               title="Remove photo"
+                              aria-label={`Remove photo ${idx + 1}`}
                             >
-                              ✕
+                              <X size={14} />
                             </button>
                             {idx === 0 && (
-                              <span className="absolute bottom-1 left-1 bg-green-500 text-white text-xs px-2 py-1 rounded">
+                              <span className="absolute bottom-1.5 left-1.5 bg-green-600 text-white text-xs px-2 py-0.5 rounded shadow font-semibold">
                                 Primary
                               </span>
                             )}
@@ -255,7 +369,7 @@ export const ArtisanDashboard: React.FC = () => {
 
                 <div className="flex gap-3">
                   <button
-                    onClick={() => setShowAddProduct(false)}
+                    onClick={resetFormState}
                     className="flex-1 px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-semibold"
                   >
                     Cancel
